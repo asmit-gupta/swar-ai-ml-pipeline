@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Audio AI - Speech to Text</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+      color: #333;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 50px;
+      color: white;
+    }
+
+    .header h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    }
+
+    .header p {
+      font-size: 1.1rem;
+      opacity: 0.9;
+      font-weight: 300;
+    }
+
+    .main-card {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(20px);
+      border-radius: 24px;
+      padding: 40px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      transition: all 0.3s ease;
+    }
+
+    .main-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 30px 80px rgba(0,0,0,0.2);
+    }
+
+    .upload-section {
+      margin-bottom: 40px;
+    }
+
+    .upload-box {
+      border: 3px dashed #667eea;
+      border-radius: 16px;
+      padding: 60px 40px;
+      text-align: center;
+      background: linear-gradient(45deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
+      transition: all 0.3s ease;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .upload-box::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+      transition: left 0.5s;
+    }
+
+    .upload-box:hover {
+      border-color: #764ba2;
+      background: linear-gradient(45deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+      transform: scale(1.02);
+    }
+
+    .upload-box:hover::before {
+      left: 100%;
+    }
+
+    .upload-icon {
+      font-size: 4rem;
+      margin-bottom: 20px;
+      color: #667eea;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .upload-text {
+      margin-bottom: 20px;
+    }
+
+    .upload-title {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+    }
+
+    .upload-subtitle {
+      color: #666;
+      font-size: 1rem;
+    }
+
+    .file-input {
+      display: none;
+    }
+
+    .file-input-label {
+      display: inline-block;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      padding: 12px 30px;
+      border-radius: 50px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+      margin-bottom: 15px;
+    }
+
+    .file-input-label:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    }
+
+    .file-info {
+      margin-top: 15px;
+      padding: 12px;
+      background: rgba(102, 126, 234, 0.1);
+      border-radius: 8px;
+      color: #333;
+      font-weight: 500;
+      display: none;
+    }
+
+    .submit-btn {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      border: none;
+      padding: 15px 40px;
+      border-radius: 50px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+      width: 100%;
+      margin-top: 20px;
+    }
+
+    .submit-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(102, 126, 234, 0.6);
+    }
+
+    .submit-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .supported-formats {
+      margin-top: 20px;
+      text-align: center;
+      color: #666;
+      font-size: 0.9rem;
+    }
+
+    .format-tags {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+
+    .format-tag {
+      background: rgba(102, 126, 234, 0.1);
+      color: #667eea;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+
+    .results-section {
+      margin-top: 40px;
+      opacity: 0;
+      transform: translateY(20px);
+      transition: all 0.5s ease;
+    }
+
+    .results-section.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .transcript-container {
+      margin-bottom: 30px;
+    }
+
+    .transcript-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      color: #333;
+    }
+
+    .transcript-header h3 {
+      font-size: 1.4rem;
+      font-weight: 600;
+    }
+
+    .transcript-content {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 12px;
+      padding: 25px;
+      white-space: pre-wrap;
+      line-height: 1.8;
+      color: #333;
+      font-size: 1rem;
+      max-height: 400px;
+      overflow-y: auto;
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.05);
+    }
+
+    .llm-analysis {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
+      border: 1px solid rgba(102, 126, 234, 0.2);
+    }
+
+    .raw-transcript {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      margin: 20px 0;
+    }
+
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #667eea;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 15px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      color: #667eea;
+      font-weight: 600;
+    }
+
+    .toggle-section {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .toggle-btn {
+      background: rgba(102, 126, 234, 0.1);
+      color: #667eea;
+      border: 2px solid rgba(102, 126, 234, 0.3);
+      padding: 8px 16px;
+      border-radius: 25px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.3s ease;
+    }
+
+    .toggle-btn.active {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      border-color: #667eea;
+    }
+
+    .toggle-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        padding: 20px 10px;
+      }
+      
+      .header h1 {
+        font-size: 2rem;
+      }
+      
+      .main-card {
+        padding: 25px;
+      }
+      
+      .upload-box {
+        padding: 40px 20px;
+      }
+      
+      .upload-icon {
+        font-size: 3rem;
+      }
+
+      .toggle-section {
+        justify-content: center;
+      }
+    }
+
+    /* Pulse animation for active upload area */
+    .upload-box.dragover {
+      animation: pulse 1s infinite;
+      border-color: #764ba2;
+      background: linear-gradient(45deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15));
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.02); }
+      100% { transform: scale(1); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🎙️ Cladbe Audio AI</h1>
+      <p>Transform your audio into text with advanced AI transcription</p>
+    </div>
+
+    <div class="main-card">
+      <form method="POST" action="/upload" enctype="multipart/form-data" id="uploadForm">
+        <div class="upload-section">
+          <div class="upload-box" id="uploadBox">
+            <div class="upload-icon">🎵</div>
+            <div class="upload-text">
+              <div class="upload-title">Drop your audio file here</div>
+              <div class="upload-subtitle">or click to browse</div>
+            </div>
+            
+            <input type="file" name="file" accept=".mp3,.wav,.m4a,.ogg,.flac" required class="file-input" id="fileInput" />
+            <label for="fileInput" class="file-input-label">Choose File</label>
+            
+            <div class="file-info" id="fileInfo"></div>
+          </div>
+
+          <div class="supported-formats">
+            <div>Supported formats:</div>
+            <div class="format-tags">
+              <span class="format-tag">MP3</span>
+              <span class="format-tag">WAV</span>
+              <span class="format-tag">M4A</span>
+              <span class="format-tag">OGG</span>
+              <span class="format-tag">FLAC</span>
+            </div>
+          </div>
+
+          <button type="submit" class="submit-btn" id="submitBtn" disabled>
+            🚀 Start Transcription
+          </button>
+        </div>
+      </form>
+
+      <div class="loading" id="loading">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Transcribing your audio...</div>
+      </div>
+
+      {% if llm_output or full_text %}
+      <div class="results-section show">
+        <div class="toggle-section">
+          <button type="button" class="toggle-btn active" id="showAnalysis">🤖 AI Analysis</button>
+          <button type="button" class="toggle-btn" id="showTranscript">📝 Raw Transcript</button>
+        </div>
+
+        {% if llm_output %}
+        <div class="transcript-container" id="analysisContainer">
+          <div class="transcript-header">
+            <span>🤖</span>
+            <h3>AI Analysis & Summary</h3>
+          </div>
+          <div class="transcript-content llm-analysis">{{ llm_output }}</div>
+        </div>
+        {% endif %}
+
+        {% if full_text %}
+        <div class="transcript-container" id="transcriptContainer" style="display: none;">
+          <div class="transcript-header">
+            <span>📝</span>
+            <h3>Raw Transcription</h3>
+          </div>
+          <div class="transcript-content raw-transcript">{{ full_text }}</div>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const fileInfo = document.getElementById('fileInfo');
+    const submitBtn = document.getElementById('submitBtn');
+    const uploadBox = document.getElementById('uploadBox');
+    const uploadForm = document.getElementById('uploadForm');
+    const loading = document.getElementById('loading');
+
+    // Toggle functionality
+    const showAnalysisBtn = document.getElementById('showAnalysis');
+    const showTranscriptBtn = document.getElementById('showTranscript');
+    const analysisContainer = document.getElementById('analysisContainer');
+    const transcriptContainer = document.getElementById('transcriptContainer');
+
+    if (showAnalysisBtn && showTranscriptBtn) {
+      showAnalysisBtn.addEventListener('click', function() {
+        showAnalysisBtn.classList.add('active');
+        showTranscriptBtn.classList.remove('active');
+        if (analysisContainer) analysisContainer.style.display = 'block';
+        if (transcriptContainer) transcriptContainer.style.display = 'none';
+      });
+
+      showTranscriptBtn.addEventListener('click', function() {
+        showTranscriptBtn.classList.add('active');
+        showAnalysisBtn.classList.remove('active');
+        if (transcriptContainer) transcriptContainer.style.display = 'block';
+        if (analysisContainer) analysisContainer.style.display = 'none';
+      });
+    }
+
+    // File input change handler
+    fileInput.addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (file) {
+        const fileSize = (file.size / 1024 / 1024).toFixed(2);
+        fileInfo.innerHTML = `
+          <strong>Selected:</strong> ${file.name}<br>
+          <strong>Size:</strong> ${fileSize} MB<br>
+          <strong>Type:</strong> ${file.type}
+        `;
+        fileInfo.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = '🚀 Start Transcription';
+      }
+    });
+
+    // Drag and drop functionality
+    uploadBox.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      uploadBox.classList.add('dragover');
+    });
+
+    uploadBox.addEventListener('dragleave', function(e) {
+      e.preventDefault();
+      uploadBox.classList.remove('dragover');
+    });
+
+    uploadBox.addEventListener('drop', function(e) {
+      e.preventDefault();
+      uploadBox.classList.remove('dragover');
+      
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        fileInput.files = files;
+        fileInput.dispatchEvent(new Event('change'));
+      }
+    });
+
+    // Form submission handler
+    uploadForm.addEventListener('submit', function(e) {
+      if (fileInput.files.length > 0) {
+        loading.style.display = 'block';
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Processing...';
+      }
+    });
+
+    // Click to upload
+    uploadBox.addEventListener('click', function() {
+      fileInput.click();
+    });
+  </script>
+</body>
+</html>
