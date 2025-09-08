@@ -32,7 +32,7 @@ def upload_file():
     try:
         # Use optimized parallel transcription
         transcription_start = time.time()
-        full_text, segments = transcribe_audio(
+        full_text, segments, diarization_info = transcribe_audio(
             file_path, 
             language="hi", 
             use_parallel=True,  # Enable parallel processing
@@ -67,9 +67,12 @@ def upload_file():
         return render_template("index.html", 
                              llm_output=llm_output, 
                              full_text=full_text,
+                             diarization_info=diarization_info,
+                             segments=segments,
                              processing_time=f"{total_time:.2f}",
                              transcription_time=f"{transcription_time:.2f}",
-                             analysis_time=f"{analysis_time:.2f}")
+                             analysis_time=f"{analysis_time:.2f}",
+                             has_speakers=bool(diarization_info.get('speakers', {})))
     
     except Exception as e:
         print(f"❌ Error processing file: {e}")
@@ -94,7 +97,7 @@ def upload_file_async():
     try:
         # Transcription
         transcription_start = time.time()
-        full_text, segments = transcribe_audio(
+        full_text, segments, diarization_info = transcribe_audio(
             file_path, 
             language="hi", 
             use_parallel=True,
@@ -119,6 +122,9 @@ def upload_file_async():
             "success": True,
             "full_text": full_text,
             "llm_output": llm_output,
+            "diarization_info": diarization_info,
+            "segments": segments,
+            "has_speakers": bool(diarization_info.get('speakers', {})),
             "performance": {
                 "transcription_time": round(transcription_time, 2),
                 "analysis_time": round(analysis_time, 2),

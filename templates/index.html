@@ -352,6 +352,146 @@
       50% { transform: scale(1.02); }
       100% { transform: scale(1); }
     }
+
+    /* Performance Metrics */
+    .performance-metrics {
+      display: flex;
+      gap: 20px;
+      padding: 20px;
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
+      border-radius: 12px;
+      margin-bottom: 25px;
+      flex-wrap: wrap;
+    }
+
+    .metric-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.7);
+      border-radius: 8px;
+      min-width: 100px;
+    }
+
+    .metric-label {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+
+    .metric-value {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #667eea;
+    }
+
+    /* Transcript Segments */
+    .transcript-segment {
+      margin-bottom: 15px;
+      padding: 12px;
+      background: rgba(102, 126, 234, 0.05);
+      border-radius: 8px;
+      border-left: 3px solid #667eea;
+    }
+
+    .timestamp {
+      font-size: 0.8rem;
+      color: #888;
+      font-family: 'Monaco', 'Courier New', monospace;
+      margin-right: 10px;
+    }
+
+    .speaker-label {
+      font-weight: 600;
+      color: #667eea;
+      margin-right: 8px;
+    }
+
+    .segment-text {
+      line-height: 1.6;
+    }
+
+    /* Speaker Statistics */
+    .speaker-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .speaker-stat-card {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
+      border: 1px solid rgba(102, 126, 234, 0.2);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .speaker-stat-card h4 {
+      color: #667eea;
+      margin-bottom: 15px;
+      font-size: 1.2rem;
+      font-weight: 600;
+    }
+
+    .stat-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(102, 126, 234, 0.1);
+    }
+
+    .stat-item:last-child {
+      border-bottom: none;
+    }
+
+    .stat-label {
+      font-size: 0.9rem;
+      color: #666;
+      font-weight: 500;
+    }
+
+    .stat-value {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #333;
+    }
+
+    /* Speaker Transcript Styling */
+    .speaker-transcript {
+      font-family: 'Georgia', serif;
+      line-height: 1.8;
+      white-space: pre-line;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+      .performance-metrics {
+        flex-direction: column;
+        gap: 10px;
+      }
+      
+      .metric-item {
+        flex-direction: row;
+        justify-content: space-between;
+      }
+
+      .speaker-stats-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .transcript-segment {
+        padding: 8px;
+      }
+
+      .timestamp {
+        display: block;
+        margin-bottom: 5px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -401,11 +541,43 @@
 
       {% if llm_output or full_text %}
       <div class="results-section show">
+        <!-- Performance Metrics -->
+        {% if processing_time %}
+        <div class="performance-metrics">
+          <div class="metric-item">
+            <span class="metric-label">Total Time:</span>
+            <span class="metric-value">{{ processing_time }}s</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Transcription:</span>
+            <span class="metric-value">{{ transcription_time }}s</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Analysis:</span>
+            <span class="metric-value">{{ analysis_time }}s</span>
+          </div>
+          {% if has_speakers %}
+          <div class="metric-item">
+            <span class="metric-label">Speakers:</span>
+            <span class="metric-value">{{ diarization_info.total_speakers or diarization_info.speakers|length }} detected</span>
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <!-- Toggle Buttons -->
         <div class="toggle-section">
           <button type="button" class="toggle-btn active" id="showAnalysis">🤖 AI Analysis</button>
+          {% if has_speakers %}
+          <button type="button" class="toggle-btn" id="showSpeakers">👥 Speaker View</button>
+          {% endif %}
           <button type="button" class="toggle-btn" id="showTranscript">📝 Raw Transcript</button>
+          {% if has_speakers %}
+          <button type="button" class="toggle-btn" id="showDiarization">📊 Speaker Stats</button>
+          {% endif %}
         </div>
 
+        <!-- AI Analysis Container -->
         {% if llm_output %}
         <div class="transcript-container" id="analysisContainer">
           <div class="transcript-header">
@@ -416,13 +588,68 @@
         </div>
         {% endif %}
 
+        <!-- Speaker-Separated Transcription -->
+        {% if has_speakers %}
+        <div class="transcript-container" id="speakersContainer" style="display: none;">
+          <div class="transcript-header">
+            <span>👥</span>
+            <h3>Speaker-Separated Transcript</h3>
+          </div>
+          <div class="transcript-content speaker-transcript">{{ full_text }}</div>
+        </div>
+        {% endif %}
+
+        <!-- Raw Transcription -->
         {% if full_text %}
         <div class="transcript-container" id="transcriptContainer" style="display: none;">
           <div class="transcript-header">
             <span>📝</span>
             <h3>Raw Transcription</h3>
           </div>
-          <div class="transcript-content raw-transcript">{{ full_text }}</div>
+          <div class="transcript-content raw-transcript">
+            {% if segments %}
+              {% for segment in segments %}
+                <div class="transcript-segment">
+                  <span class="timestamp">[{{ "%.1f"|format(segment.start) }}s - {{ "%.1f"|format(segment.end) }}s]</span>
+                  {% if segment.speaker %}<span class="speaker-label">{{ segment.speaker }}:</span>{% endif %}
+                  <span class="segment-text">{{ segment.text }}</span>
+                </div>
+              {% endfor %}
+            {% else %}
+              {{ full_text }}
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Speaker Statistics -->
+        {% if has_speakers and diarization_info.speakers %}
+        <div class="transcript-container" id="diarizationContainer" style="display: none;">
+          <div class="transcript-header">
+            <span>📊</span>
+            <h3>Speaker Statistics</h3>
+          </div>
+          <div class="transcript-content diarization-stats">
+            <div class="speaker-stats-grid">
+              {% for speaker, stats in diarization_info.speakers.items() %}
+              <div class="speaker-stat-card">
+                <h4>{{ speaker }}</h4>
+                <div class="stat-item">
+                  <span class="stat-label">Speaking Time:</span>
+                  <span class="stat-value">{{ "%.1f"|format(stats.total_duration) }}s</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">Segments:</span>
+                  <span class="stat-value">{{ stats.segments_count }}</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">Avg Segment:</span>
+                  <span class="stat-value">{{ "%.1f"|format(stats.total_duration / stats.segments_count) }}s</span>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
         </div>
         {% endif %}
       </div>
@@ -438,27 +665,48 @@
     const uploadForm = document.getElementById('uploadForm');
     const loading = document.getElementById('loading');
 
-    // Toggle functionality
-    const showAnalysisBtn = document.getElementById('showAnalysis');
-    const showTranscriptBtn = document.getElementById('showTranscript');
-    const analysisContainer = document.getElementById('analysisContainer');
-    const transcriptContainer = document.getElementById('transcriptContainer');
+    // Enhanced toggle functionality for multiple views
+    const toggleButtons = {
+      showAnalysis: document.getElementById('showAnalysis'),
+      showSpeakers: document.getElementById('showSpeakers'),
+      showTranscript: document.getElementById('showTranscript'),
+      showDiarization: document.getElementById('showDiarization')
+    };
 
-    if (showAnalysisBtn && showTranscriptBtn) {
-      showAnalysisBtn.addEventListener('click', function() {
-        showAnalysisBtn.classList.add('active');
-        showTranscriptBtn.classList.remove('active');
-        if (analysisContainer) analysisContainer.style.display = 'block';
-        if (transcriptContainer) transcriptContainer.style.display = 'none';
+    const containers = {
+      analysisContainer: document.getElementById('analysisContainer'),
+      speakersContainer: document.getElementById('speakersContainer'),
+      transcriptContainer: document.getElementById('transcriptContainer'),
+      diarizationContainer: document.getElementById('diarizationContainer')
+    };
+
+    function showView(activeView) {
+      // Remove active class from all buttons
+      Object.values(toggleButtons).forEach(btn => {
+        if (btn) btn.classList.remove('active');
       });
 
-      showTranscriptBtn.addEventListener('click', function() {
-        showTranscriptBtn.classList.add('active');
-        showAnalysisBtn.classList.remove('active');
-        if (transcriptContainer) transcriptContainer.style.display = 'block';
-        if (analysisContainer) analysisContainer.style.display = 'none';
+      // Hide all containers
+      Object.values(containers).forEach(container => {
+        if (container) container.style.display = 'none';
       });
+
+      // Show selected view
+      const activeButton = toggleButtons[activeView];
+      const activeContainer = containers[activeView.replace('show', '').toLowerCase() + 'Container'];
+      
+      if (activeButton) activeButton.classList.add('active');
+      if (activeContainer) activeContainer.style.display = 'block';
     }
+
+    // Add event listeners for all toggle buttons
+    Object.entries(toggleButtons).forEach(([viewName, button]) => {
+      if (button) {
+        button.addEventListener('click', function() {
+          showView(viewName);
+        });
+      }
+    });
 
     // File input change handler
     fileInput.addEventListener('change', function(e) {

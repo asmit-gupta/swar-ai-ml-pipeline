@@ -3,15 +3,50 @@ import whisper
 import tempfile
 import subprocess
 import wave
-import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
-import math
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 import time
 import json
+import torch
+import numpy as np
 
-# Global model variable for multiprocessing
+# Open source speaker diarization using SpeechBrain, VAD, and spectral clustering
+_speechbrain_available = False
+_sklearn_available = False
+_librosa_available = False
+
+def _init_open_source_diarization():
+    """Initialize open source diarization dependencies"""
+    global _speechbrain_available, _sklearn_available, _librosa_available
+    
+    # Check SpeechBrain availability
+    try:
+        from speechbrain.inference.speaker import SpeakerRecognition
+        from speechbrain.inference.VAD import VAD
+        _speechbrain_available = True
+    except Exception:
+        _speechbrain_available = False
+    
+    # Check sklearn availability
+    try:
+        from sklearn.cluster import SpectralClustering, AgglomerativeClustering
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.metrics.pairwise import cosine_similarity
+        _sklearn_available = True
+    except Exception:
+        _sklearn_available = False
+    
+    # Check librosa availability
+    try:
+        import librosa
+        _librosa_available = True
+    except Exception:
+        _librosa_available = False
+    
+    return _speechbrain_available or _sklearn_available
+
+# Global model variables for multiprocessing
 model = None
 
 def init_worker():
@@ -235,6 +270,299 @@ def is_valid_audio(file_path):
     except:
         return False
 
+
+def try_speechbrain_diarization(audio_path: str) -> Dict[str, Any]:
+    """Try SpeechBrain open source diarization"""
+    try:
+        from speechbrain.inference.speaker import SpeakerRecognition
+        from speechbrain.inference.VAD import VAD
+        
+        print("🔄 Using SpeechBrain Speaker Diarization...")
+        
+        # Load VAD model
+        vad = VAD.from_hparams(source="speechbrain/vad-crdnn-libriparty", savedir="tmp_vad")
+        
+        # Load speaker verification model
+        verification = SpeakerRecognition.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb", 
+            savedir="tmp_spkrec"
+        )
+        
+        # Process audio
+        boundaries = vad.get_speech_segments(audio_path)
+        
+        if len(boundaries) < 2:
+            return {"speakers": {}, "segments": [], "error": "Not enough speech segments"}
+        
+        embeddings = []
+        segments_info = []
+        
+        for i, (start, end) in enumerate(boundaries):
+            try:
+                embedding = verification.encode_batch_from_file(
+                    audio_path, 
+                    start_sample=int(start*16000), 
+                    end_sample=int(end*16000)
+                )
+                embeddings.append(embedding.squeeze().cpu().numpy())
+                segments_info.append({"start": start, "end": end, "duration": end-start})
+            except Exception as e:
+                print(f"Warning: Failed to process segment {i+1}: {e}")
+                continue
+        
+        if len(embeddings) >= 2:
+            return cluster_speakers_with_embeddings(embeddings, segments_info)
+        
+        return {"speakers": {}, "segments": [], "error": "Insufficient embeddings"}
+        
+    except Exception as e:
+        return {"speakers": {}, "segments": [], "error": f"SpeechBrain failed: {e}"}
+
+def try_spectral_clustering_diarization(audio_path: str) -> Dict[str, Any]:
+    """Try spectral clustering approach using audio features"""
+    try:
+        import librosa
+        from sklearn.cluster import SpectralClustering
+        from sklearn.preprocessing import StandardScaler
+        
+        print("🔄 Using Spectral Clustering Diarization...")
+        
+        # Load and preprocess audio
+        y, sr = librosa.load(audio_path, sr=16000)
+        
+        # Extract features in 2-second windows
+        hop_length = sr * 2
+        n_segments = len(y) // hop_length
+        
+        if n_segments < 2:
+            return {"speakers": {}, "segments": [], "error": "Audio too short for clustering"}
+        
+        features = []
+        segments_info = []
+        
+        for i in range(n_segments):
+            start_sample = i * hop_length
+            end_sample = min((i + 1) * hop_length, len(y))
+            segment = y[start_sample:end_sample]
+            
+            # Extract MFCC features
+            mfccs = librosa.feature.mfcc(y=segment, sr=sr, n_mfcc=13)
+            mfcc_mean = np.mean(mfccs, axis=1)
+            
+            # Extract other features
+            spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=segment, sr=sr))
+            zero_crossing_rate = np.mean(librosa.feature.zero_crossing_rate(segment))
+            
+            # Combine features
+            feature_vector = np.concatenate([mfcc_mean, [spectral_centroid, zero_crossing_rate]])
+            features.append(feature_vector)
+            
+            segments_info.append({
+                "start": start_sample / sr,
+                "end": end_sample / sr,
+                "duration": (end_sample - start_sample) / sr
+            })
+        
+        # Normalize features
+        scaler = StandardScaler()
+        features_normalized = scaler.fit_transform(features)
+        
+        # Cluster into speakers (max 2 for sales calls)
+        n_speakers = min(2, len(features))
+        clustering = SpectralClustering(n_clusters=n_speakers, random_state=42)
+        speaker_labels = clustering.fit_predict(features_normalized)
+        
+        # Create speaker results
+        speakers = {}
+        segments = []
+        
+        for i, (segment, label) in enumerate(zip(segments_info, speaker_labels)):
+            speaker_id = f"SPEAKER_{label:02d}"
+            
+            # Add speaker info to segment
+            segment_with_speaker = segment.copy()
+            segment_with_speaker["speaker"] = speaker_id
+            segments.append(segment_with_speaker)
+            
+            # Track speaker stats
+            if speaker_id not in speakers:
+                speakers[speaker_id] = {
+                    "total_duration": 0,
+                    "segments_count": 0
+                }
+            
+            speakers[speaker_id]["total_duration"] += segment["duration"]
+            speakers[speaker_id]["segments_count"] += 1
+        
+        return {
+            "speakers": speakers,
+            "segments": segments,
+            "total_speakers": len(speakers)
+        }
+        
+    except Exception as e:
+        return {"speakers": {}, "segments": [], "error": f"Spectral clustering failed: {e}"}
+
+def try_simple_vad_diarization(audio_path: str) -> Dict[str, Any]:
+    """Try simple VAD + alternating speaker assignment"""
+    try:
+        print("🔄 Using Simple VAD Diarization...")
+        
+        # Load audio
+        waveform, sample_rate = torchaudio.load(audio_path)
+        
+        # Convert to mono if stereo
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
+        # Simple energy-based VAD
+        frame_length = int(0.025 * sample_rate)  # 25ms frames
+        hop_length = int(0.010 * sample_rate)    # 10ms hop
+        
+        # Calculate energy for each frame
+        frames = []
+        for i in range(0, waveform.shape[1] - frame_length, hop_length):
+            frame = waveform[0, i:i+frame_length]
+            energy = torch.sum(frame ** 2)
+            frames.append(energy.item())
+        
+        frames = np.array(frames)
+        
+        # Simple VAD threshold
+        threshold = np.mean(frames) + 0.5 * np.std(frames)
+        speech_frames = frames > threshold
+        
+        # Convert frame indices to time segments
+        segments = []
+        in_speech = False
+        start_frame = 0
+        
+        for i, is_speech in enumerate(speech_frames):
+            if is_speech and not in_speech:
+                start_frame = i
+                in_speech = True
+            elif not is_speech and in_speech:
+                start_time = start_frame * hop_length / sample_rate
+                end_time = i * hop_length / sample_rate
+                if end_time - start_time > 0.5:  # Minimum 0.5s segments
+                    segments.append({
+                        "start": start_time,
+                        "end": end_time,
+                        "duration": end_time - start_time
+                    })
+                in_speech = False
+        
+        if len(segments) < 2:
+            return {"speakers": {}, "segments": [], "error": "Not enough speech segments"}
+        
+        # Simple alternating speaker assignment
+        speakers = {
+            "SPEAKER_00": {"total_duration": 0, "segments_count": 0},
+            "SPEAKER_01": {"total_duration": 0, "segments_count": 0}
+        }
+        
+        diarized_segments = []
+        for i, segment in enumerate(segments):
+            speaker_id = f"SPEAKER_{i % 2:02d}"
+            segment_with_speaker = segment.copy()
+            segment_with_speaker["speaker"] = speaker_id
+            diarized_segments.append(segment_with_speaker)
+            
+            speakers[speaker_id]["total_duration"] += segment["duration"]
+            speakers[speaker_id]["segments_count"] += 1
+        
+        return {
+            "speakers": speakers,
+            "segments": diarized_segments,
+            "total_speakers": len(speakers)
+        }
+        
+    except Exception as e:
+        return {"speakers": {}, "segments": [], "error": f"Simple VAD failed: {e}"}
+
+def cluster_speakers_with_embeddings(embeddings, segments_info):
+    """Cluster speakers using embeddings and cosine similarity"""
+    try:
+        from sklearn.metrics.pairwise import cosine_similarity
+        from sklearn.cluster import AgglomerativeClustering
+        
+        # Calculate similarity matrix
+        embeddings_array = np.array(embeddings)
+        similarity_matrix = cosine_similarity(embeddings_array)
+        
+        # Use agglomerative clustering
+        n_speakers = min(2, len(embeddings))
+        clustering = AgglomerativeClustering(n_clusters=n_speakers, metric='precomputed', linkage='average')
+        
+        # Convert similarity to distance
+        distance_matrix = 1 - similarity_matrix
+        speaker_labels = clustering.fit_predict(distance_matrix)
+        
+        # Organize results
+        speakers = {}
+        segments = []
+        
+        for i, (segment, label) in enumerate(zip(segments_info, speaker_labels)):
+            speaker_id = f"SPEAKER_{label:02d}"
+            
+            segment_with_speaker = segment.copy()
+            segment_with_speaker["speaker"] = speaker_id
+            segments.append(segment_with_speaker)
+            
+            if speaker_id not in speakers:
+                speakers[speaker_id] = {
+                    "total_duration": 0,
+                    "segments_count": 0
+                }
+            
+            speakers[speaker_id]["total_duration"] += segment["duration"]
+            speakers[speaker_id]["segments_count"] += 1
+        
+        return {
+            "speakers": speakers,
+            "segments": segments,
+            "total_speakers": len(speakers)
+        }
+        
+    except Exception as e:
+        return {"speakers": {}, "segments": [], "error": f"Clustering failed: {e}"}
+
+def perform_open_source_diarization(audio_path: str, timeout_seconds: int = 60) -> Dict[str, Any]:
+    """
+    Perform open source speaker diarization using multiple fallback approaches
+    
+    Args:
+        audio_path: Path to audio file
+        timeout_seconds: Maximum time to wait for diarization (unused for now)
+        
+    Returns:
+        Dictionary with speaker segments and timeline
+    """
+    print("🎭 Performing open source speaker diarization...")
+    
+    # Try different approaches in order of preference
+    approaches = [
+        (try_speechbrain_diarization, "SpeechBrain"),
+        (try_spectral_clustering_diarization, "Spectral Clustering"),
+        (try_simple_vad_diarization, "Simple VAD")
+    ]
+    
+    for approach_func, approach_name in approaches:
+        try:
+            result = approach_func(audio_path)
+            if not result.get("error") and result.get("speakers"):
+                print(f"✅ {approach_name} diarization succeeded")
+                print(f"🎯 Found {len(result['speakers'])} unique speakers")
+                return result
+            else:
+                print(f"⚠️  {approach_name} failed: {result.get('error', 'Unknown error')}")
+        except Exception as e:
+            print(f"❌ {approach_name} exception: {e}")
+    
+    print("❌ All diarization approaches failed")
+    return {"speakers": {}, "segments": [], "error": "All diarization methods failed"}
+
+
 # Original single-threaded function (kept for compatibility)
 def transcribe_audio_single(file_path: str, language: str = "hi") -> Tuple[str, List]:
     """Original single-threaded transcription function"""
@@ -263,39 +591,129 @@ def transcribe_audio_single(file_path: str, language: str = "hi") -> Tuple[str, 
     return result["text"], result["segments"]
 
 # Updated main transcribe function (backward compatible)
-def transcribe_audio(file_path: str, language: str = "hi", use_parallel: bool = True, chunk_duration: int = 30) -> Tuple[str, List]:
+def transcribe_audio(file_path: str, language: str = "hi", use_parallel: bool = True, chunk_duration: int = 30, include_diarization: bool = True) -> Tuple[str, List, Dict]:
     """
-    Main transcription function with option for parallel processing
+    Main transcription function with option for parallel processing and speaker diarization
     
     Args:
         file_path: Path to input audio file
         language: Language code for transcription
         use_parallel: Whether to use parallel processing
         chunk_duration: Duration of each chunk in seconds (for parallel mode)
+        include_diarization: Whether to perform speaker diarization
     
     Returns:
-        Tuple of (full_text, segments)
+        Tuple of (full_text, segments, diarization_info)
     """
+    # Perform transcription
     if use_parallel:
         # Get audio duration to decide if parallel processing is worth it
         duration = get_audio_duration_ffmpeg(file_path)
         
         # Only use parallel processing for longer audio files
         if duration > 60:  # Only parallelize if audio is longer than 1 minute
-            return transcribe_audio_parallel(file_path, language, chunk_duration)
+            full_text, segments = transcribe_audio_parallel(file_path, language, chunk_duration)
+        else:
+            full_text, segments = transcribe_audio_single(file_path, language)
+    else:
+        # Fall back to original single-threaded approach
+        full_text, segments = transcribe_audio_single(file_path, language)
     
-    # Fall back to original single-threaded approach for short files
-    return transcribe_audio_single(file_path, language)
+    # Perform speaker diarization if requested
+    diarization_info = {}
+    if include_diarization:
+        # Convert to WAV for diarization if needed
+        wav_path = convert_to_wav(file_path) if not file_path.lower().endswith('.wav') else file_path
+        
+        try:
+            diarization_info = perform_open_source_diarization(wav_path)
+            
+            # Create speaker-labeled transcription
+            if diarization_info.get('segments') and not diarization_info.get('error'):
+                print("🔗 Creating speaker-labeled transcription...")
+                
+                # For now, create a simple timeline-based speaker assignment
+                # This works well for sales calls with alternating speakers
+                diar_segments = sorted(diarization_info['segments'], key=lambda x: x['start'])
+                
+                if len(diar_segments) > 0:
+                    # Method 1: Timeline-based assignment (simpler and more reliable)
+                    speaker_timeline = []
+                    for diar_seg in diar_segments:
+                        speaker_timeline.append({
+                            'start': diar_seg['start'],
+                            'end': diar_seg['end'], 
+                            'speaker': diar_seg['speaker']
+                        })
+                    
+                    # Assign speakers to transcription segments based on timeline
+                    for trans_seg in segments:
+                        assigned_speaker = "UNKNOWN"
+                        trans_mid = (trans_seg['start'] + trans_seg['end']) / 2
+                        
+                        # Find which speaker segment this transcription falls into
+                        for timeline_seg in speaker_timeline:
+                            if timeline_seg['start'] <= trans_mid <= timeline_seg['end']:
+                                assigned_speaker = timeline_seg['speaker']
+                                break
+                        
+                        trans_seg['speaker'] = assigned_speaker
+                    
+                    # Create speaker-labeled full text
+                    speaker_labeled_parts = []
+                    current_speaker = None
+                    current_speaker_text = []
+                    
+                    for segment in segments:
+                        speaker = segment.get('speaker', 'UNKNOWN')
+                        text = segment.get('text', '').strip()
+                        
+                        if text:
+                            if speaker != current_speaker:
+                                # New speaker, save previous and start new
+                                if current_speaker_text and current_speaker:
+                                    combined_text = ' '.join(current_speaker_text)
+                                    speaker_labeled_parts.append(f"[{current_speaker}]: {combined_text}")
+                                
+                                current_speaker = speaker
+                                current_speaker_text = [text]
+                            else:
+                                # Same speaker, accumulate text
+                                current_speaker_text.append(text)
+                    
+                    # Don't forget the last speaker
+                    if current_speaker_text and current_speaker:
+                        combined_text = ' '.join(current_speaker_text)
+                        speaker_labeled_parts.append(f"[{current_speaker}]: {combined_text}")
+                    
+                    if speaker_labeled_parts:
+                        full_text = "\n\n".join(speaker_labeled_parts)
+                        print(f"✅ Created speaker-labeled transcription with {len(speaker_labeled_parts)} speaker turns")
+        
+        except Exception as e:
+            print(f"Warning: Diarization failed: {e}")
+            diarization_info = {"error": str(e)}
+        
+        finally:
+            # Cleanup WAV file if we created it
+            if wav_path != file_path:
+                try:
+                    os.remove(wav_path)
+                except:
+                    pass
+    
+    return full_text, segments, diarization_info
 
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: python transcribe.py <audio_file_path> [--parallel] [--chunk-duration=30]")
+        print("Usage: python transcribe.py <audio_file_path> [--parallel] [--chunk-duration=30] [--no-diarization]")
         sys.exit(1)
     
     audio_file = sys.argv[1]
     use_parallel = "--parallel" in sys.argv or True  # Default to parallel
+    include_diarization = "--no-diarization" not in sys.argv  # Default to include diarization
     
     # Parse chunk duration
     chunk_duration = 30
@@ -303,14 +721,26 @@ if __name__ == "__main__":
         if arg.startswith("--chunk-duration="):
             chunk_duration = int(arg.split("=")[1])
     
-    print("🔄 Transcribing audio...")
+    print("🔄 Transcribing audio with speaker diarization...")
     try:
         start_time = time.time()
-        full_text, segments = transcribe_audio(audio_file, language="hi", use_parallel=use_parallel, chunk_duration=chunk_duration)
+        full_text, segments, diarization_info = transcribe_audio(
+            audio_file, 
+            language="hi", 
+            use_parallel=use_parallel, 
+            chunk_duration=chunk_duration,
+            include_diarization=include_diarization
+        )
         end_time = time.time()
         
         print(f"\n✅ Transcription Complete in {end_time - start_time:.2f} seconds:\n")
         print(full_text)
+        
+        # Print diarization summary
+        if include_diarization and diarization_info.get('speakers'):
+            print(f"\n🎭 Speaker Summary:")
+            for speaker, info in diarization_info['speakers'].items():
+                print(f"  {speaker}: {info['total_duration']:.1f}s ({info['segments_count']} segments)")
         
         # Save to txt file
         out_path = audio_file + ".txt"
@@ -318,108 +748,20 @@ if __name__ == "__main__":
             f.write(full_text)
         print(f"\n📝 Transcription saved to: {out_path}")
         
+        # Save detailed JSON output if diarization was performed
+        if include_diarization:
+            json_out_path = audio_file + "_detailed.json"
+            detailed_output = {
+                "full_text": full_text,
+                "segments": segments,
+                "diarization_info": diarization_info,
+                "processing_time": end_time - start_time
+            }
+            with open(json_out_path, "w", encoding="utf-8") as f:
+                json.dump(detailed_output, f, indent=2, ensure_ascii=False)
+            print(f"📊 Detailed output saved to: {json_out_path}")
+        
     except Exception as e:
         print(f"❌ Error during transcription:\n{e}")
 
 
-
-
-# You are a **Conversation Analysis AI** trained specifically for the **real estate industry**. Your task is to analyze a real estate sales call transcript to assess agent performance, identify customer interest, and provide insights for improvement.
-
-# ### Instructions:
-
-# 1. **Conversation Summary**
-#    Provide a clear summary in **3 to 5 bullet points**, covering:
-
-#    * Main topics discussed
-#    * Customer's sentiment and level of interest
-#    * Any objections or buying signals raised
-
-# 2. **Agent Performance Evaluation**
-#    Rate the agent on a **scale of 1 to 5** (1 = poor, 5 = excellent) across the following areas. Include a **brief justification (1–2 sentences)** for each score:
-
-#    * `introduction_rapport`: First impression, greeting, rapport building
-#    * `product_knowledge`: Accuracy and detail in describing the property or offering
-#    * `objection_handling`: How effectively concerns or questions were addressed
-#    * `tone_language`: Clarity, tone, professionalism, and active listening
-#    * `closure_strategy`: Ending the call with a strong CTA, follow-up plan, or next steps
-
-# 3. **Customer Buying Intent**
-#    Classify the customer’s intent as one of the following:
-
-#    * `"Not Interested"`
-#    * `"Mildly Interested"`
-#    * `"Interested but Hesitant"`
-#    * `"Ready to Proceed"`
-
-#    Provide a 1–2 sentence justification based on language and tone.
-
-# 4. **Actionable Recommendations**
-#    Suggest **2 to 4 specific, actionable improvements** the agent could apply in future calls to improve engagement, close more deals, or handle concerns better.
-
-# 5. **Keyword & Phrase Spotting**
-#    Extract and categorize important keywords or phrases from the transcript under:
-
-#    * `"positive_signals"`: Indicates buying interest or intent
-#    * `"objections_or_concerns"`: Hesitations, doubts, or questions
-#    * `"sales_opportunities"`: Timing, needs, location, budget cues
-#    * `"red_flags"`: Signs of disinterest or deal blockers
-
-# ---
-
-# ### 📦 Return the output in this **structured JSON** format:
-
-# ```json
-# {
-#   "summary": [
-#     "Bullet point 1",
-#     "Bullet point 2",
-#     "..."
-#   ],
-#   "agent_evaluation": {
-#     "introduction_rapport": {
-#       "rating": 1-5,
-#       "justification": "..."
-#     },
-#     "product_knowledge": {
-#       "rating": 1-5,
-#       "justification": "..."
-#     },
-#     "objection_handling": {
-#       "rating": 1-5,
-#       "justification": "..."
-#     },
-#     "tone_language": {
-#       "rating": 1-5,
-#       "justification": "..."
-#     },
-#     "closure_strategy": {
-#       "rating": 1-5,
-#       "justification": "..."
-#     }
-#   },
-#   "customer_intent": {
-#     "classification": "Not Interested / Mildly Interested / Interested but Hesitant / Ready to Proceed",
-#     "justification": "..."
-#   },
-#   "recommendations": [
-#     "Recommendation 1",
-#     "Recommendation 2",
-#     "... up to 4"
-#   ],
-#   "keywords": {
-#     "positive_signals": ["..."],
-#     "objections_or_concerns": ["..."],
-#     "sales_opportunities": ["..."],
-#     "red_flags": ["..."]
-#   }
-# }
-# ```
-
-# ---
-
-# **Transcript:**
-
-# ```plaintext
-# "{transcript}"
-# ```
